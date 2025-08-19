@@ -23,7 +23,7 @@ SEQ_LEN_LIM = 500
 
 SEQ_DEPTH_LIM = 500
 
-with open("./data/families_under_500.pkl","rb") as f:
+with open("./data/families_under_500_over_10.pkl","rb") as f:
 
     FAMILIES = pkl.load(f)
 
