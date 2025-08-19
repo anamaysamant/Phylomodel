@@ -79,9 +79,9 @@ lamb = 0.1
 num_epochs = 100
 Large_D = 768
 hidden_dim = 64
-embed_dim = 64
+embed_dim = 256
 n_heads = 4
-n_layers = 2
+n_layers = 3
 batch_size = 5
 
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset, 
@@ -277,7 +277,7 @@ for epoch in range(num_epochs):
 
         test_epoch_losses.append((test_epoch_loss/n_test_nodes).item())
 
-torch.save(model.state_dict(), f"model_{Large_D}_{64}_64_4_2_1000_{num_epochs}epochs_{lr}lr.pt")
+torch.save(model.state_dict(), f"model_{Large_D}_{hidden_dim}_{embed_dim}_{n_heads}_{n_layers}_{Large_D}_{num_epochs}epochs_{lr}lr.pt")
 
 with open(f"train_losses_{num_epochs}epochs_{lr}lr_{batch_size}batch.pkl", "wb") as f:
     pkl.dump(train_epoch_losses, f)
