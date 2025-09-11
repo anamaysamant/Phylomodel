@@ -16,7 +16,7 @@ INIT_SEQS = ["0"]
 N_MUTATIONS_START = 500
 N_MUTATIONS_END = ["1000"]
 
-num_simulations = 1
+num_simulations = 10
 
 SIM_INDS = list(range(1,num_simulations+1))
 SIM_INDS = list(map(str,SIM_INDS))
@@ -29,9 +29,18 @@ PSEUDOCOUNTS = ["0.0","0.3","0.4"]
 
 R_EFFS = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.5,2.0]
 
-with open("families_under_200.pkl","rb") as f:
+FAMILIES = []
 
-    FAMILIES = pkl.load(f)
+with open("./data/families_under_200_over_50.pkl","rb") as f:
+
+    ALL_FAMILIES = pkl.load(f)
+
+for family in ALL_FAMILIES:
+
+    if os.path.exists(f"data/msa-seed-simulations/MSA-1b/{family}/init-seq-0/logits-proposal/static-context/10/{family}-1.fasta"):
+        FAMILIES.append(family)
+
+NSEQS = ["50"]
 
 rule all:
     input:
@@ -44,9 +53,9 @@ rule all:
         # expand("data/msa-{msa_type}-simulations/MSA-1b/{fam}/init-seq-{init_seq}/{proposal_type}-proposal/dynamic-context/{context_size}/{context_sampling}/{fam}-{sim_ind}.fasta",
         #         msa_type = MSA_TYPES, context_sampling = CONTEXT_SAMPLINGS, context_size = CONTEXT_SIZES, 
         #         fam = FAMILIES, sim_ind = SIM_INDS, proposal_type = PROPOSAL_TYPES, init_seq = INIT_SEQS),
-        expand("data/msa-{msa_type}-simulations/MSA-1b/{fam}/init-seq-{init_seq}/{proposal_type}-proposal/static-context/{context_size}/{fam}-{sim_ind}.fasta",
-                msa_type = MSA_TYPES, context_size = CONTEXT_SIZES, fam = FAMILIES, 
-                sim_ind = SIM_INDS, proposal_type = PROPOSAL_TYPES, init_seq = INIT_SEQS),
+        # expand("data/msa-{msa_type}-simulations/MSA-1b/{fam}/init-seq-{init_seq}/{proposal_type}-proposal/static-context/{context_size}/{fam}-{sim_ind}.fasta",
+        #         msa_type = MSA_TYPES, context_size = CONTEXT_SIZES, fam = FAMILIES, 
+        #         sim_ind = SIM_INDS, proposal_type = PROPOSAL_TYPES, init_seq = INIT_SEQS),
         # expand("data/msa-{msa_type}-simulation-trees/MSA-1b/{fam}/init-seq-{init_seq}/{proposal_type}-proposal/dynamic-context/{context_size}/{context_sampling}/{fam}-{sim_ind}.newick",
         #         msa_type = MSA_TYPES, context_sampling = CONTEXT_SAMPLINGS, context_size = CONTEXT_SIZES, 
         #         fam = FAMILIES, sim_ind = SIM_INDS, proposal_type = PROPOSAL_TYPES, init_seq = INIT_SEQS),
@@ -79,7 +88,39 @@ rule all:
         # expand("other-analyses/r-effective-analysis/data/{fam}/init-seq-{init_seq}/scaling-{r_eff}/static-context/{context_size}/{fam}-{sim_ind}.fasta",
         #         msa_type = MSA_TYPES, context_size = CONTEXT_SIZES, fam = FAMILIES, 
         #         sim_ind = SIM_INDS, proposal_type = PROPOSAL_TYPES, init_seq = INIT_SEQS, r_eff = R_EFFS),
+        # expand("data/msa-{msa_type}-simulations-subtrees/{fam}/subtree-{sim_ind}.newick",
+        #         sim_ind = SIM_INDS, fam = FAMILIES, msa_type = MSA_TYPES), 
+        # expand("data/submsa-{msa_type}-simulations/{fam}/submsa-{sim_ind}.fasta",
+        #         sim_ind = SIM_INDS, fam = FAMILIES, msa_type = MSA_TYPES),
+        expand("data/msa-{msa_type}-simulations-subtrees-equal-size/{nseqs}/{fam}/subtree-{sim_ind}.newick",
+                sim_ind = SIM_INDS, nseqs = NSEQS, fam = FAMILIES, msa_type = MSA_TYPES), 
+        expand("data/submsa-{msa_type}-simulations-equal-size/{nseqs}/{fam}/submsa-{sim_ind}.fasta",
+                sim_ind = SIM_INDS, nseqs = NSEQS, fam = FAMILIES, msa_type = MSA_TYPES),
 
+
+rule generate_subtrees:
+    input:
+        MSA="data/msa-{msa_type}-simulations/MSA-1b/{fam}/init-seq-0/logits-proposal/static-context/10/{fam}-1.fasta",
+        tree="data/{msa_type}-trees/{fam}_{msa_type}.newick",
+    output:
+        subtrees=expand("data/msa-{msa_type}-simulations-subtrees/{fam}/subtree-{sim_ind}.newick",
+                sim_ind = SIM_INDS, allow_missing = True), 
+        subMSAs=expand("data/submsa-{msa_type}-simulations/{fam}/submsa-{sim_ind}.fasta",
+                sim_ind = SIM_INDS, allow_missing = True),
+    script:
+        "scripts/dataset_subtree_augment.py"
+
+rule generate_subtrees_equal:
+    input:
+        MSA="data/msa-{msa_type}-simulations/MSA-1b/{fam}/init-seq-0/logits-proposal/static-context/10/{fam}-1.fasta",
+        tree="data/{msa_type}-trees/{fam}_{msa_type}.newick",
+    output:
+        subtrees=expand("data/msa-{msa_type}-simulations-subtrees-equal-size/{nseqs}/{fam}/subtree-{sim_ind}.newick",
+                sim_ind = SIM_INDS, allow_missing = True), 
+        subMSAs=expand("data/submsa-{msa_type}-simulations-equal-size/{nseqs}/{fam}/submsa-{sim_ind}.fasta",
+                sim_ind = SIM_INDS, allow_missing = True),
+    script:
+        "scripts/dataset_subtree_augment_equal.py"
 
 rule generate_tree_MSA_static:
     input:

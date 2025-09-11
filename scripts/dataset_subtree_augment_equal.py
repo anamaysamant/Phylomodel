@@ -19,6 +19,7 @@ output_subtree_paths = snakemake.output["subtrees"]
 output_MSA_paths = snakemake.output["subMSAs"]
 
 num_subtrees = len(output_subtree_paths)
+subtree_size = int(snakemake.wildcards["nseqs"])
 
 sim_seqs = read_msa(msa_path)
 names_to_seq = dict(sim_seqs)
@@ -29,14 +30,10 @@ num_leaves = len(leaf_names)
 
 tree.set_outgroup(tree.get_midpoint_outgroup())
 
-subtree_sizes = np.arange(0.1, 1.1, 0.1)
-
 for i in range(num_subtrees):
 
     output_subtree_path = output_subtree_paths[i]
     output_MSA_path = output_MSA_paths[i]
-
-    subtree_size = int(max(subtree_sizes[i] * num_leaves, 5))
 
     subtree_leaves_ind = np.random.choice(range(num_leaves), subtree_size, replace = False)
     subtree_leaves = [leaf_names[j] for j in subtree_leaves_ind]

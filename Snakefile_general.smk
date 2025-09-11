@@ -20,14 +20,15 @@ SIM_INDS = list(range(1,num_simulations+1))
 SIM_INDS = list(map(str,SIM_INDS))
 
 SEQ_LEN_LIM = 500
-
 SEQ_DEPTH_LIM = 500
 
-with open("./data/families_under_500_over_10.pkl","rb") as f:
+NSEQS = ["50"]
+
+with open("./data/families_under_200_over_50.pkl","rb") as f:
 
     FAMILIES = pkl.load(f)
 
-FAMILIES = ["PF00004"]
+# FAMILIES = FAMILIES[:10000]
 
 rule all:
     input:
@@ -43,10 +44,14 @@ rule all:
         #         msa_type = MSA_TYPES, fam= FAMILIES, sim_ind = SIM_INDS),
         # expand("data/sequences-bootstrap-{msa_type}-msa/{fam}/bootstrap-{sim_ind}.fasta",
         #         msa_type = MSA_TYPES, fam= FAMILIES, sim_ind = SIM_INDS)
-        expand("data/{msa_type}-subtrees/{fam}/subtree-{sim_ind}.newick",
-                sim_ind = SIM_INDS, msa_type = MSA_TYPES, fam = FAMILIES), 
-        expand("data/protein-families-submsa-{msa_type}/{fam}/submsa-{sim_ind}.fasta",
-                sim_ind = SIM_INDS, msa_type = MSA_TYPES, fam = FAMILIES)
+        # expand("data/{msa_type}-subtrees/{fam}/subtree-{sim_ind}.newick",
+        #         sim_ind = SIM_INDS, msa_type = MSA_TYPES, fam = FAMILIES), 
+        # expand("data/protein-families-submsa-{msa_type}/{fam}/submsa-{sim_ind}.fasta",
+        #         sim_ind = SIM_INDS, msa_type = MSA_TYPES, fam = FAMILIES)
+        expand("data/{msa_type}-subtrees-equal-size/{nseqs}/{fam}/subtree-{sim_ind}.newick",
+                sim_ind = SIM_INDS, msa_type = MSA_TYPES, fam = FAMILIES, nseqs = NSEQS), 
+        expand("data/protein-families-submsa-{msa_type}-equal-size/{nseqs}/{fam}/submsa-{sim_ind}.fasta",
+                sim_ind = SIM_INDS, msa_type = MSA_TYPES, fam = FAMILIES, nseqs = NSEQS),
         
 rule generate_subtrees:
     input:
@@ -57,10 +62,20 @@ rule generate_subtrees:
                 sim_ind = SIM_INDS, allow_missing = True), 
         subMSAs=expand("data/protein-families-submsa-{msa_type}/{fam}/submsa-{sim_ind}.fasta",
                 sim_ind = SIM_INDS, allow_missing = True),
-    params:
-        subtree_size=20
     script:
         "scripts/dataset_subtree_augment.py"
+
+rule generate_subtrees_equal:
+    input:
+        MSA="data/protein-families-msa-{msa_type}/{fam}_{msa_type}.fasta",
+        tree="data/{msa_type}-trees/{fam}_{msa_type}.newick"
+    output:
+        subtrees=expand("data/{msa_type}-subtrees-equal-size/{nseqs}/{fam}/subtree-{sim_ind}.newick",
+                sim_ind = SIM_INDS, allow_missing = True), 
+        subMSAs=expand("data/protein-families-submsa-{msa_type}-equal-size/{nseqs}/{fam}/submsa-{sim_ind}.fasta",
+                sim_ind = SIM_INDS, allow_missing = True),
+    script:
+        "scripts/dataset_subtree_augment_equal.py"
 
 rule generate_tree:
     input:

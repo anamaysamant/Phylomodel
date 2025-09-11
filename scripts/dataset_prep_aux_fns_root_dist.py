@@ -27,69 +27,51 @@ def init_tree_processing(tree):
     leaf_lengths_dict = {}
     internal_lengths_dict = {}
     internal_distances_from_root = {}
-    child_parent_rel = {}
+    leaf_distances_from_root = {}
 
     for node in tree.traverse("preorder"):    
-
         if node.is_root():
             internal_distances_from_root[node.name] = 0
             internal_lengths_dict[node.name] = 0
-            child_parent_rel[node.name] = -1
+            continue
         else:
             branch_length = node.get_distance(node.up)
             
             if node.is_leaf():
                 leaf_lengths_dict[node.name] = branch_length
+                leaf_distances_from_root[node.name] = node.get_distance(tree)
             else:
                 internal_lengths_dict[node.name] = branch_length
                 internal_distances_from_root[node.name] = node.get_distance(tree)
+            
+    return leaf_lengths_dict, leaf_distances_from_root, internal_lengths_dict, internal_distances_from_root
 
-            child_parent_rel[node.name] = node.up.name
-        
-    return leaf_lengths_dict, internal_lengths_dict, internal_distances_from_root, child_parent_rel
-
-def prepare_branch_lengths_and_relationships(true_tree_path, MSA_path):
+def prepare_branch_lengths_and_root_distances(true_tree_path, MSA_path):
 
     sequences = read_msa(MSA_path)
-    true_tree = Phylo.read(true_tree_path, format="newick")
-    true_tree.root_at_midpoint()
-
-    sequences = reorder_seqs(true_tree.clade, dict(sequences))
     seqs_order = [seq[0] for seq in sequences]
 
     true_tree, node_taxa_mapping, taxa_node_mapping = newick_to_graph(true_tree_path)
-    leaf_lengths_dict, internal_lengths_dict, internal_distances_from_root, child_parent_rel  = init_tree_processing(true_tree)
+    leaf_lengths_dict, leaf_distances_from_root_dict, internal_lengths_dict, internal_distances_from_root_dict  = init_tree_processing(true_tree)
 
     leaf_branch_lengths = [leaf_lengths_dict[taxa_node_mapping[seq_name]] for seq_name in seqs_order]
+    leaf_distances_from_root = [leaf_distances_from_root_dict[taxa_node_mapping[seq_name]] for seq_name in seqs_order]
 
-    sorted_internal_distances_from_root_indices = np.argsort(list(internal_distances_from_root.values()))
-    sorted_internal_nodes= np.array(list(internal_distances_from_root.keys()))[sorted_internal_distances_from_root_indices]
+    sorted_internal_distances_from_root_indices = np.argsort(list(internal_distances_from_root_dict.values()))
+    sorted_internal_nodes = np.array(list(internal_distances_from_root_dict.keys()))[sorted_internal_distances_from_root_indices]
 
     internal_branch_lengths = [internal_lengths_dict[node] for node in sorted_internal_nodes]
+    internal_distances_from_root = [internal_distances_from_root_dict[node] for node in sorted_internal_nodes]
 
-   
-
-    if len(internal_branch_lengths) != len(leaf_branch_lengths) - 1:
-        return None, None, None
-
-
-    assert len(internal_branch_lengths) == 49
-    
     all_branch_lengths =  internal_branch_lengths + leaf_branch_lengths
     all_branch_lengths = torch.tensor(all_branch_lengths)
 
-    leaf_node_parents = [child_parent_rel[taxa_node_mapping[taxa]] for taxa in seqs_order]
-    int_node_parents = [child_parent_rel[node] for node in sorted_internal_nodes]
-
-    all_parents = int_node_parents + leaf_node_parents
-    parents_mapping = {node:ind for ind, node in enumerate(sorted_internal_nodes)}
-    parents_mapping[-1] = -2
-
-    all_parents_mapped = torch.tensor([int(parents_mapping[node]) for node in all_parents])
+    all_root_distances = internal_distances_from_root + leaf_distances_from_root
+    all_root_distances = torch.tensor(all_root_distances)
 
     seqs_order_dict = {seq:i for i,seq in enumerate(seqs_order)}
 
-    return all_branch_lengths, all_parents_mapped, seqs_order_dict
+    return all_branch_lengths, all_root_distances, seqs_order_dict
 
 def prepare_initial_int_node_embeddings(MSA_file_path, seqs_order, Large_D = 1000, leaf_embeddings = None):
 
@@ -127,13 +109,8 @@ def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000):
 
     for i in tqdm(range(len(data_ids))):
 
-        true_tree = Phylo.read(f"../data/msa-seed-simulations-subtrees-equal-size/50/{data_ids[i][0]}/subtree-{data_ids[i][1]}.newick", format="newick")
-        true_tree.root_at_midpoint()
-
         submsa_path = f"../data/submsa-seed-simulations-equal-size/50/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta"
-
         submsa = read_msa(submsa_path) 
-        submsa = reorder_seqs(true_tree.clade, dict(submsa))
 
         _, _, tokens = batch_converter([submsa])
         tokens = tokens.to(device)
@@ -160,14 +137,11 @@ def make_datasets(data_id, leaf_embeddings = None, Large_D = 1000):
     true_tree_path = f"../data/msa-seed-simulations-subtrees-equal-size/50/{data_id[0]}/subtree-{data_id[1]}.newick"
     MSA_path = f"../data/submsa-seed-simulations-equal-size/50/{data_id[0]}/submsa-{data_id[1]}.fasta"
 
-    all_branch_lengths, mapped_parents, seqs_order = prepare_branch_lengths_and_relationships(true_tree_path, MSA_path)
-
-    if all_branch_lengths == None:
-        return None, None, None
+    all_branch_lengths, all_root_distances, seqs_order = prepare_branch_lengths_and_root_distances(true_tree_path, MSA_path)
 
     internal_node_embeddings = prepare_initial_int_node_embeddings(MSA_path, seqs_order, Large_D = Large_D, leaf_embeddings = leaf_embeddings)
 
-    return internal_node_embeddings, all_branch_lengths, mapped_parents
+    return internal_node_embeddings, all_branch_lengths, all_root_distances
 
 def newick_to_graph(newick_str):
     
@@ -194,7 +168,7 @@ def node_embedding(tree, seqs_order, node_taxa_mapping, rooted = False, leaf_emb
     ntips = len(tree.get_leaves()) 
 
     if leaf_embeddings == None:   
-        leaf_embeddings = torch.eye(ntips).to(device)
+        leaf_embeddings = torch.eye(ntips)
 
         
     for node in tree.traverse('postorder'):
@@ -242,54 +216,3 @@ def node_embedding(tree, seqs_order, node_taxa_mapping, rooted = False, leaf_emb
     edge_index = torch.LongTensor(edge_index)
     
     return torch.stack(node_features), edge_index, leaf_indices
-
-
-# def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, batch_size = 10):
-
-#     torch.cuda.empty_cache()
-    
-#     all_embeddings = []
-
-#     # Process in batches
-#     for batch_start in tqdm(range(0, len(data_ids), batch_size)):
-
-#         current_batch = range(batch_start, batch_start + batch_size)
-
-#         true_trees = [Phylo.read(f"../data/msa-seed-simulations-subtrees/{data_ids[i][0]}/subtree-{data_ids[i][1]}.newick", format="newick") for i in current_batch]
-
-#         for i in range(len(true_trees)):
-#             true_trees[i].root_at_midpoint()
-
-#         batch_paths = [f"../data/submsa-seed-simulations/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta" for i in current_batch]
-
-#         # Load MSAs
-#         batch_data = [read_msa(p) for p in batch_paths]
-#         batch_data = [reorder_seqs(true_trees[i].clade, dict(batch_data[i])) for i in range(len(batch_data))]
-
-#         # Store sizes for unbatching
-#         msa_depths = [len(msa) for msa in batch_data]
-#         msa_lengths = [len(msa[0][1]) for msa in batch_data]
-
-#         # Convert to tokens
-#         _, _, batch_tokens = batch_converter(batch_data)  # shape: (B, N_max, L_max)
-#         batch_tokens = batch_tokens.to(device)
-
-#         with torch.no_grad():
-#             batch_embeddings = model(batch_tokens, need_head_weights = False, return_contacts = False, repr_layers = [12])["representations"][12]
-#             batch_embeddings = batch_embeddings.mean(dim=2)
-#             B, R, H = batch_embeddings.shape
-#             padding_tensor = torch.zeros((B,R, Large_D - H)).to(device)
-#             batch_embeddings = torch.concat((batch_embeddings, padding_tensor), dim=2)
-
-#             del padding_tensor
-
-#             for i, (depth, length, path) in enumerate(zip(msa_depths, msa_lengths, batch_paths)):
-                
-#                 leaf_emb = batch_embeddings[i, :depth, :].cpu()
-#                 all_embeddings.append(leaf_emb)
-
-#             del batch_tokens, batch_embeddings
-#             torch.cuda.empty_cache()
-
-
-#     return all_embeddings

@@ -62,7 +62,7 @@ sequences: Sequence[TensorLike], constant_value=0, dtype=None
 
     return X_array, y_array
 
-with open("../data/processed-train-test-data/root_distance_MSA_train_test_sets_MSA_transf_dirichlet_under_200_equal.pkl","rb") as f:
+with open("../data/root_distance_MSA_train_test_sets_MSA_transf_dirichlet_under_200_equal.pkl","rb") as f:
    data = pkl.load(f)
 
 X_train = data[0]
@@ -72,25 +72,25 @@ y_test_bl = data[3]
 y_train_pc = data[4]
 y_test_pc = data[5]
 
-print(len(X_train))
+train_dataset = TreeDataset((X_train, y_train_bl))
+test_dataset = TreeDataset((X_test, y_test_bl))
 
-train_dataset = TreeDataset((X_train, y_train_pc))
-test_dataset = TreeDataset((X_test, y_test_pc))
 
-criterion = nn.CrossEntropyLoss()
-criterion_sum = nn.CrossEntropyLoss(reduction="sum")
+criterion = nn.MSELoss()
+criterion_sum = nn.MSELoss(reduction="sum")
 gpu = int(get_free_gpu())
 device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
 
 
 checkpoint_path = None
 Large_D = 768
-lamb = 0.1
 
 if checkpoint_path != None:
     checkpoint = torch.load(checkpoint_path, weights_only=True)
 
-    model = ParentPredictor(**checkpoint["model_hparams"]).to(device)
+    del checkpoint["model_hparams"]["output_dim"]
+
+    model = BranchLengthPredictor(**checkpoint["model_hparams"]).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
 
     optimizer = torch.optim.Adam(model.parameters()) 
@@ -103,9 +103,8 @@ if checkpoint_path != None:
     embed_dim = checkpoint['model_hparams']['embed_dim']
     n_heads = checkpoint['model_hparams']['n_heads']
     n_layers = checkpoint['model_hparams']['n_layers']
-    output_dim = checkpoint['model_hparams']['output_dim']
     Large_D = checkpoint['model_hparams']['input_dim']
-    lr = 0.0001
+    lr = checkpoint['learning_rate']
 
 else:
     lr = 0.0001
@@ -113,11 +112,11 @@ else:
     embed_dim = 64
     n_heads = 4
     n_layers = 2
-    batch_size = 1
+    batch_size = 5
     output_dim = Large_D
     cur_epochs = 0
 
-    model = ParentPredictor(Large_D, hidden_dim=hidden_dim, embed_dim=embed_dim, n_heads=n_heads, n_layers=n_layers, output_dim=output_dim).to(device)
+    model = BranchLengthPredictor(Large_D, hidden_dim=hidden_dim, embed_dim=embed_dim, n_heads=n_heads, n_layers=n_layers).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = lr)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1)
 
@@ -136,7 +135,7 @@ n_total_steps = len(train_loader)
 train_epoch_losses = []
 test_epoch_losses = []
 
-num_epochs = 50
+num_epochs = 2
 
 for epoch in range(cur_epochs, num_epochs):
 
@@ -150,8 +149,6 @@ for epoch in range(cur_epochs, num_epochs):
         n_train_nodes = 0
 
         total_loss = torch.tensor(0, dtype=torch.float32).to(device)
-        ce_loss = torch.tensor(0, dtype=torch.float32).to(device)
-        regularizer_loss = torch.tensor(0, dtype=torch.float32).to(device)
 
         n_int_nodes_list = []
 
@@ -184,23 +181,13 @@ for epoch in range(cur_epochs, num_epochs):
             attn_mask = (msa_index_vector_j.unsqueeze(0) == msa_index_vector_j.unsqueeze(1)).float() 
             attn_mask = (1 - attn_mask) * -1e9
 
-            outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)[...,:n_nodes]
+            outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)
 
-            for msa_ind in msa_index_vector_j.unique():
-                    
-                    msa_mask = msa_index_vector_j == msa_ind
-                    size = msa_mask.sum()
-                    mask = torch.triu(torch.ones(size, size), diagonal=0).bool()[...,:n_nodes].to(device)
-                    outputs[msa_mask] = outputs[msa_mask].masked_fill(mask, float('-inf'))
+            root_mask = labels_j != 0
 
-            root_mask = labels_j != -2
+            cur_mse_loss = criterion_sum(outputs[root_mask], labels_j[root_mask])
+            total_loss += cur_mse_loss 
 
-            cur_ce_loss = criterion_sum(outputs[root_mask, :], labels_j[root_mask])
-            cur_regularizer_loss = lamb * torch.linalg.vector_norm(torch.softmax(outputs, dim = 1).sum(dim = 0) - 2).type_as(cur_ce_loss)
-
-            total_loss += cur_ce_loss # + cur_regularizer_loss
-            ce_loss += cur_ce_loss
-            # regularizer_loss = cur_regularizer_loss
             n_train_nodes += len(labels_j[root_mask])
         
         optimizer.zero_grad()
@@ -208,7 +195,7 @@ for epoch in range(cur_epochs, num_epochs):
         optimizer.step()
 
         if (i+1) % 1 == 0:
-            print (f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{n_total_steps}], mean CE Loss: {(ce_loss/n_train_nodes).item():.4f}')
+            print (f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{n_total_steps}], mean MSE Loss: {(total_loss/n_train_nodes).item():.4f}')
 
     scheduler.step()
 
@@ -254,18 +241,11 @@ for epoch in range(cur_epochs, num_epochs):
                 attn_mask = (msa_index_vector_j.unsqueeze(0) == msa_index_vector_j.unsqueeze(1)).float() 
                 attn_mask = (1 - attn_mask) * -1e9
 
-                outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)[...,:n_nodes]
+                outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)
 
-                for msa_ind in msa_index_vector_j.unique():
-                    
-                    msa_mask = msa_index_vector_j == msa_ind
-                    size = msa_mask.sum()
-                    mask = torch.triu(torch.ones(size, size), diagonal=0).bool()[...,:n_nodes].to(device)
-                    outputs[msa_mask] = outputs[msa_mask].masked_fill(mask, float('-inf'))
+                root_mask = labels_j != 0
 
-                root_mask = labels_j != -2
-
-                train_epoch_loss += criterion_sum(outputs[root_mask, :], labels_j[root_mask])
+                train_epoch_loss += criterion_sum(outputs[root_mask], labels_j[root_mask])
                 n_train_nodes += len(labels_j[root_mask])
 
         train_epoch_losses.append((train_epoch_loss/n_train_nodes).item())
@@ -310,47 +290,36 @@ for epoch in range(cur_epochs, num_epochs):
                 attn_mask = (msa_index_vector_j.unsqueeze(0) == msa_index_vector_j.unsqueeze(1)).float() 
                 attn_mask = (1 - attn_mask) * -1e9
 
-                outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)[...,:n_nodes]
+                outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)
 
-                for msa_ind in msa_index_vector_j.unique():
-                    
-                    msa_mask = msa_index_vector_j == msa_ind
-                    size = msa_mask.sum()
-                    mask = torch.triu(torch.ones(size, size), diagonal=0).bool()[...,:n_nodes].to(device)
-                    outputs[msa_mask] = outputs[msa_mask].masked_fill(mask, float('-inf'))
+                root_mask = labels_j != 0
 
-                root_mask = labels_j != -2
-
-                test_epoch_loss += criterion_sum(outputs[root_mask, :], labels_j[root_mask])
+                test_epoch_loss += criterion_sum(outputs[root_mask], labels_j[root_mask])
                 n_test_nodes += len(labels_j[root_mask])
 
         test_epoch_losses.append((test_epoch_loss/n_test_nodes).item())
 
-
     if (epoch + 1) % 50 == 0 or epoch == num_epochs - 1:
 
-        text = f"{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_10_reps_equal_mask"
-
-        with open(f"train_losses_{text}.pkl", "wb") as f:
+        with open(f"bl_train_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
             pkl.dump(train_epoch_losses, f)
 
-        with open(f"test_losses_{text}.pkl", "wb") as f:
+        with open(f"bl_test_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
             pkl.dump(test_epoch_losses,f)
             
         torch.save({
                     'epoch': epoch + 1,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict,
                     'model_hparams': {
                     'input_dim': Large_D,
                     'hidden_dim': hidden_dim,
                     'embed_dim': embed_dim,
                     'n_heads':n_heads,
                     'n_layers':n_layers,
-                    'output_dim':output_dim
                     },
                     'batch_size': batch_size,
                     'learning_rate':lr
-                    }, f"fit-200-equal-{epoch + 1}-epochs.pt")
+                    }, f"bl-fit-200-equal-{epoch + 1}-epochs.pt")
 
