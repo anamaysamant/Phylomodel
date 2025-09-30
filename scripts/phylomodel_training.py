@@ -11,58 +11,11 @@ from select_gpu import get_free_gpu
 import torch.nn as nn
 import re
 
+from phylomodel_training_aux_fns import *
+
 torch.set_grad_enabled(True)
 
-TensorLike = TypeVar("TensorLike", np.ndarray, torch.Tensor)
-
-class TreeDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
-
-    def __len__(self):
-        return len(self.data[0])
-
-    def __getitem__(self, idx):
-        X, y = self.data[0][idx], self.data[1][idx]
-        return X, y
-
-def collate_tensors(
-sequences: Sequence[TensorLike], constant_value=0, dtype=None
-) -> TensorLike:
-    
-    batch_size = len(sequences)
-
-    X_batch, y_batch = zip(*sequences)
-    X_batch, y_batch = list(X_batch), list(y_batch)
-    
-    shape_X = [batch_size] + np.max([mat.shape for mat in X_batch], 0).tolist()
-    shape_y = [batch_size] + [shape_X[1]]
-
-    if dtype is None:
-        dtype = X_batch[0].dtype
-
-    if isinstance(X_batch[0], np.ndarray):
-        X_array = np.full(shape_X, constant_value, dtype=dtype)
-    elif isinstance(X_batch[0], torch.Tensor):
-        X_array = torch.full(shape_X, constant_value, dtype=dtype)
-
-    if isinstance(y_batch[0], np.ndarray):
-        y_array = np.full(shape_y, -1, dtype=y_batch[0][0].dtype)
-    elif isinstance(y_batch[0], torch.Tensor):
-        y_array = torch.full(shape_y, -1, dtype=y_batch[0][0].dtype)
-        
-    for arr, mat in zip(X_array, X_batch):
-        arrslice = tuple(slice(dim) for dim in mat.shape)
-        arr[arrslice] = mat
-
-    for arr, mat in zip(y_array, y_batch):
-        arrslice = tuple(slice(dim) for dim in mat.shape)
-        arr[arrslice] = mat
-
-
-    return X_array, y_array
-
-with open("../data/processed-train-test-data/root_distance_MSA_train_test_sets_MSA_transf_dirichlet_under_200_equal.pkl","rb") as f:
+with open("../data/processed-train-test-data/root_distance_train_test_sets_PF00004_size_4_pp.pkl","rb") as f:
    data = pkl.load(f)
 
 X_train = data[0]
@@ -71,8 +24,6 @@ y_train_bl = data[2]
 y_test_bl = data[3]
 y_train_pc = data[4]
 y_test_pc = data[5]
-
-print(len(X_train))
 
 train_dataset = TreeDataset((X_train, y_train_pc))
 test_dataset = TreeDataset((X_test, y_test_pc))
@@ -83,7 +34,7 @@ gpu = int(get_free_gpu())
 device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
 
 
-checkpoint_path = None
+checkpoint_path = "../models/fit-PF0004-size-4-50-epochs.pt"
 Large_D = 768
 lamb = 0.1
 
@@ -95,7 +46,9 @@ if checkpoint_path != None:
 
     optimizer = torch.optim.Adam(model.parameters()) 
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=1)
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
     cur_epochs = checkpoint['epoch']
     batch_size = checkpoint['batch_size']
@@ -105,7 +58,8 @@ if checkpoint_path != None:
     n_layers = checkpoint['model_hparams']['n_layers']
     output_dim = checkpoint['model_hparams']['output_dim']
     Large_D = checkpoint['model_hparams']['input_dim']
-    lr = 0.0001
+    lr = checkpoint['learning_rate']
+    num_epochs = 100
 
 else:
     lr = 0.0001
@@ -113,9 +67,10 @@ else:
     embed_dim = 64
     n_heads = 4
     n_layers = 2
-    batch_size = 1
+    batch_size = 5
     output_dim = Large_D
     cur_epochs = 0
+    num_epochs = 50
 
     model = ParentPredictor(Large_D, hidden_dim=hidden_dim, embed_dim=embed_dim, n_heads=n_heads, n_layers=n_layers, output_dim=output_dim).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr = lr)
@@ -136,7 +91,7 @@ n_total_steps = len(train_loader)
 train_epoch_losses = []
 test_epoch_losses = []
 
-num_epochs = 50
+
 
 for epoch in range(cur_epochs, num_epochs):
 
@@ -352,5 +307,5 @@ for epoch in range(cur_epochs, num_epochs):
                     },
                     'batch_size': batch_size,
                     'learning_rate':lr
-                    }, f"fit-200-equal-{epoch + 1}-epochs.pt")
+                    }, f"fit-PF0004-size-4-{epoch + 1}-epochs.pt")
 

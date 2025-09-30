@@ -5,6 +5,9 @@ from dataset_prep_aux_fns import *
 import matplotlib.pyplot as plt
 from networkx.drawing.nx_pydot import graphviz_layout
 import torch.nn as nn
+import pickle as pkl
+
+from tqdm import tqdm
 
 
 def greedy_phylo_tree_bottom_up(P):
@@ -14,7 +17,6 @@ def greedy_phylo_tree_bottom_up(P):
 
     P[0,:] = 0.0
     
-    # Choose root = node with highest total outgoing probability
     root = 0
     parents = {root: None}
     parent_count = {}
@@ -23,25 +25,13 @@ def greedy_phylo_tree_bottom_up(P):
     n_int_nodes = P.shape[1]
     leaf_nodes = list(range(n_int_nodes, n))
 
-
     used = set(leaf_nodes)
 
-    max_probs_nodes = P.max(axis = 1)
-    nodes_prob_order = np.argsort(max_probs_nodes)[::-1]
+    assert (np.tril(P, k = -1) == P).all()
 
-    # reordered_nodes = [all_nodes[1:][i] for i in nodes_prob_order]
-    queue = list(nodes_prob_order)[:-1]
+    for u in range(1, n):
 
-    counter = 0
-
-    while queue:
-
-        print(len(queue))
-
-        u = queue.pop(0)
-
-        probs = [(float(P[u, v]), v) for v in range(n) if v not in used and v != u and not will_create_cycle(A, v, u)]
-        print(probs)
+        probs = [(float(P[u, v]), v) for v in range(n_int_nodes) if v not in used and P[u,v] > 0]
         probs.sort(reverse=True)
 
         parent_candidate = probs[0][1]
@@ -59,8 +49,6 @@ def greedy_phylo_tree_bottom_up(P):
             used.add(parent_candidate)
             A[u, parent_candidate] = 1
         
-        counter += 1
-
     return A
 
 def will_create_cycle(adj, u, v):
@@ -92,6 +80,7 @@ def construct_phylogenetic_tree(prob_matrix, binary=True):
         if i != j and prob_matrix[i,j] > 0
     ]
 
+
     edges.sort(key=lambda x: x[2], reverse=True)
 
     G = nx.DiGraph()
@@ -113,21 +102,19 @@ def construct_phylogenetic_tree(prob_matrix, binary=True):
 
     # Final validation
     roots = [node for node in G.nodes if G.in_degree(node) == 0]
+
     if len(roots) != 1:
-        raise ValueError(f"Tree not valid: found roots {roots}")
-    if not nx.is_weakly_connected(G):
-        raise ValueError("Tree not connected")
+        invalid_trees[0] += 1
+        invalid_roots.append(len(roots))
+        # raise ValueError(f"Tree not valid: found roots {roots}")
+    # if not nx.is_weakly_connected(G):
+        # raise ValueError("Tree not connected")
 
     return G, roots[0]
 
-def prepare_initial_leaf_embeddings(msa, Large_D = 1000):
+def prepare_initial_leaf_embeddings(msa, Large_D = 1000, model = None, batch_converter = None, device = None):
 
     torch.cuda.empty_cache()
-
-    model, alphabet = esm.pretrained.esm_msa1b_t12_100M_UR50S()
-    model = model.to(device)
-    batch_converter = alphabet.get_batch_converter()
-    model.eval()
 
     _, _, tokens = batch_converter([msa])
     tokens = tokens.to(device)
@@ -165,78 +152,101 @@ def to_newick(G, node):
 
 gpu = str(get_free_gpu())
 device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
+msa_transf, alphabet = esm.pretrained.esm_msa1b_t12_100M_UR50S()
+msa_transf = msa_transf.to(device)
+batch_converter = alphabet.get_batch_converter()
+msa_transf.eval()
 
-checkpoint_path = "../models/subtree-fit-1.pt"
+checkpoint_path = "../models/fit-200.pt"
 
 checkpoint = torch.load(checkpoint_path, weights_only=True)
-
-checkpoint["model_hparams"]["input_dim"] = checkpoint["model_hparams"]["large_D"]
-del checkpoint["model_hparams"]["large_D"]
 
 model = ParentPredictor(**checkpoint["model_hparams"]).to(device)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
-input_MSA_path = "../data/protein-families-msa-seed/PF00005_seed.fasta"
-input_MSA = read_msa(input_MSA_path)
+with open("../data/families_under_200_over_10.pkl","rb") as f:
 
-n_int_nodes = len(input_MSA) - 1
-total_nodes = 2 * len(input_MSA) - 1
-leaf_nodes = len(input_MSA)
+    all_families_init = pkl.load(f)
 
-input_MSA_order = {seq[0]:i for i,seq in enumerate(input_MSA)}
+all_families = []
 
-leaf_embeddings = prepare_initial_leaf_embeddings(input_MSA, Large_D=768)
-int_node_embeddings = prepare_initial_int_node_embeddings(input_MSA_path, input_MSA_order, Large_D=768, leaf_embeddings=leaf_embeddings)
+for family in all_families_init:
 
-X = torch.concat((int_node_embeddings, leaf_embeddings), dim=0)
-
-with torch.no_grad():
-    soft_adj_mat = model(X, attn_mask = None).squeeze(-1)[...,:n_int_nodes]
-    soft_adj_mat = nn.Softmax(dim = 1)(soft_adj_mat).cpu().numpy()
-
-# hard_adj_mat = greedy_phylo_tree_bottom_up(soft_adj_mat)
-# hard_adj_mat = np.transpose(hard_adj_mat)
-
-# tree_graph = nx.from_numpy_array(hard_adj_mat, create_using=nx.DiGraph)
-
-soft_adj_mat[0] = 0.0
-soft_adj_mat = np.concat((soft_adj_mat, np.zeros((total_nodes,leaf_nodes))), axis = 1)
-
-print(soft_adj_mat.shape)
-
-tree_graph, _ = construct_phylogenetic_tree(soft_adj_mat)
+    if os.path.exists(f"../data/msa-seed-simulations/MSA-1b/{family}/init-seq-0/logits-proposal/static-context/10/{family}-1.fasta"):
+        all_families.append(family)
 
 
-labels = list(map(str,range(n_int_nodes))) + list(input_MSA_order.keys())
-mapping = {i: labels[i] for i in range(len(labels))}
-tree_graph = nx.relabel_nodes(tree_graph, mapping)
+invalid_trees = [0]
+invalid_roots = []
 
-cycles = list(nx.simple_cycles(tree_graph))
-print("Cycles found:", cycles)
+all_families = all_families[:1]
 
-cycle_nodes = set(n for c in cycles for n in c)
+for family in tqdm(all_families):
 
-node_colors = ["red" if n in cycle_nodes else "lightblue" for n in tree_graph.nodes]
+    input_MSA_path = f"../data/protein-families-msa-seed/{family}_seed.fasta"
+    input_MSA = read_msa(input_MSA_path)
 
-pos = graphviz_layout(tree_graph, prog="dot")
-plt.figure(figsize=(30, 30))
-nx.draw(tree_graph, pos,
-        with_labels=True,
-        node_color=node_colors,
-        node_size=500,
-        arrowsize=20,
-        font_size=8)
+    n_int_nodes = len(input_MSA) - 1
+    total_nodes = 2 * len(input_MSA) - 1
+    leaf_nodes = len(input_MSA)
 
-plt.title("Cycles highlighted in red")
-plt.show()
+    input_MSA_order = {seq[0]:i for i,seq in enumerate(input_MSA)}
 
-newick_str = to_newick(tree_graph, "0") + ";"
 
-handle = StringIO(newick_str)
-tree = Phylo.read(handle, "newick")
-Phylo.write(tree, "inferred-tree-test.newick", "newick")
-# Phylo.draw_ascii(tree)
+    leaf_embeddings = prepare_initial_leaf_embeddings(input_MSA, Large_D=768, model = msa_transf, batch_converter = batch_converter, device = device)
+
+    int_node_embeddings = prepare_initial_int_node_embeddings(input_MSA_path, input_MSA_order, Large_D=768, leaf_embeddings=leaf_embeddings)
+
+    X = torch.concat((int_node_embeddings, leaf_embeddings), dim=0)
+
+    with torch.no_grad():
+        soft_adj_mat = model(X, attn_mask = None).squeeze(-1)[...,:n_int_nodes]
+        size = soft_adj_mat.shape[0]
+        mask = torch.triu(torch.ones(size, size), diagonal=0).bool()[...,:n_int_nodes].to(device)
+        soft_adj_mat = soft_adj_mat.masked_fill(mask, float('-inf'))
+        soft_adj_mat = nn.Softmax(dim = 1)(soft_adj_mat).cpu().numpy()
+
+    hard_adj_mat = greedy_phylo_tree_bottom_up(soft_adj_mat)
+    hard_adj_mat = np.transpose(hard_adj_mat)
+
+    # assert (np.triu(hard_adj_mat, k = 1) == hard_adj_mat).all()
+    tree_graph = nx.from_numpy_array(hard_adj_mat, create_using=nx.DiGraph)
+
+    # soft_adj_mat[0] = 0.0
+    # soft_adj_mat = np.concat((soft_adj_mat, np.zeros((total_nodes,leaf_nodes))), axis = 1)
+
+    # tree_graph, _ = construct_phylogenetic_tree(soft_adj_mat.transpose())
+
+    labels = list(map(str,range(n_int_nodes))) + list(input_MSA_order.keys())
+    mapping = {i: labels[i] for i in range(len(labels))}
+    tree_graph = nx.relabel_nodes(tree_graph, mapping)
+
+    cycles = list(nx.simple_cycles(tree_graph))
+    print("Cycles found:", cycles)
+
+    cycle_nodes = set(n for c in cycles for n in c)
+
+    node_colors = ["red" if n in cycle_nodes else "lightblue" for n in tree_graph.nodes]
+
+    pos = graphviz_layout(tree_graph, prog="dot")
+    plt.figure(figsize=(30, 30))
+    nx.draw(tree_graph, pos,
+            with_labels=True,
+            node_color=node_colors,
+            node_size=500,
+            arrowsize=20,
+            font_size=8)
+
+    plt.title("Cycles highlighted in red")
+    plt.show()
+
+    # newick_str = to_newick(tree_graph, "0") + ";"
+
+    # handle = StringIO(newick_str)
+    # tree = Phylo.read(handle, "newick")
+    # Phylo.write(tree, "inferred-tree-test.newick", "newick")
+    # Phylo.draw_ascii(tree)
 
 
 

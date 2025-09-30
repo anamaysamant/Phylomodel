@@ -15,13 +15,6 @@ import esm
 
 torch.cuda.empty_cache()
 
-gpu = str(get_free_gpu())
-device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
-model, alphabet = esm.pretrained.esm_msa1b_t12_100M_UR50S()
-model = model.to(device)
-batch_converter = alphabet.get_batch_converter()
-model.eval()
-
 def init_tree_processing(tree):
 
     leaf_lengths_dict = {}
@@ -67,13 +60,8 @@ def prepare_branch_lengths_and_relationships(true_tree_path, MSA_path):
 
     internal_branch_lengths = [internal_lengths_dict[node] for node in sorted_internal_nodes]
 
-   
-
     if len(internal_branch_lengths) != len(leaf_branch_lengths) - 1:
         return None, None, None
-
-
-    assert len(internal_branch_lengths) == 49
     
     all_branch_lengths =  internal_branch_lengths + leaf_branch_lengths
     all_branch_lengths = torch.tensor(all_branch_lengths)
@@ -91,18 +79,18 @@ def prepare_branch_lengths_and_relationships(true_tree_path, MSA_path):
 
     return all_branch_lengths, all_parents_mapped, seqs_order_dict
 
-def prepare_initial_int_node_embeddings(MSA_file_path, seqs_order, Large_D = 1000, leaf_embeddings = None):
+def prepare_initial_int_node_embeddings(MSA_file_path, seqs_order, Large_D = 1000, leaf_embeddings = None, delete_init_tree = True, fam = None):
 
     temp_tree_file = f"{MSA_file_path}-temp.newick"
 
     subprocess.run(["rapidnj",MSA_file_path,"-i","fa","-x",temp_tree_file])
 
-    init_tree, node_taxa_mapping, _ = newick_to_graph(temp_tree_file) 
+    init_tree, node_taxa_mapping, _ = newick_to_graph(temp_tree_file, fam = fam) 
 
     init_tree.set_outgroup(init_tree.get_midpoint_outgroup())
- 
+    
     subprocess.run(['rm', temp_tree_file])
-
+        
     node_embeddings, edges, leaf_indices = node_embedding(init_tree, seqs_order, node_taxa_mapping, rooted=True, leaf_embeddings=leaf_embeddings)
     _, _, init_distances_from_root, _  = init_tree_processing(init_tree)
 
@@ -119,7 +107,7 @@ def prepare_initial_int_node_embeddings(MSA_file_path, seqs_order, Large_D = 100
     return sorted_internal_node_embeddings
 
 
-def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000):
+def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, model = None, batch_converter = None, device = "cuda"):
 
     torch.cuda.empty_cache()
     
@@ -127,10 +115,10 @@ def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000):
 
     for i in tqdm(range(len(data_ids))):
 
-        true_tree = Phylo.read(f"../data/msa-seed-simulations-subtrees-equal-size/50/{data_ids[i][0]}/subtree-{data_ids[i][1]}.newick", format="newick")
+        true_tree = Phylo.read(f"../data/msa-seed-simulations-subtrees-equal-size/4/{data_ids[i][0]}/subtree-{data_ids[i][1]}.newick", format="newick")
         true_tree.root_at_midpoint()
 
-        submsa_path = f"../data/submsa-seed-simulations-equal-size/50/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta"
+        submsa_path = f"../data/submsa-seed-simulations-equal-size/4/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta"
 
         submsa = read_msa(submsa_path) 
         submsa = reorder_seqs(true_tree.clade, dict(submsa))
@@ -157,8 +145,8 @@ def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000):
 
 def make_datasets(data_id, leaf_embeddings = None, Large_D = 1000):
     
-    true_tree_path = f"../data/msa-seed-simulations-subtrees-equal-size/50/{data_id[0]}/subtree-{data_id[1]}.newick"
-    MSA_path = f"../data/submsa-seed-simulations-equal-size/50/{data_id[0]}/submsa-{data_id[1]}.fasta"
+    true_tree_path = f"../data/msa-seed-simulations-subtrees-equal-size/4/{data_id[0]}/subtree-{data_id[1]}.newick"
+    MSA_path = f"../data/submsa-seed-simulations-equal-size/4/{data_id[0]}/submsa-{data_id[1]}.fasta"
 
     all_branch_lengths, mapped_parents, seqs_order = prepare_branch_lengths_and_relationships(true_tree_path, MSA_path)
 
@@ -169,11 +157,15 @@ def make_datasets(data_id, leaf_embeddings = None, Large_D = 1000):
 
     return internal_node_embeddings, all_branch_lengths, mapped_parents
 
-def newick_to_graph(newick_str):
+def newick_to_graph(newick_str, fam = None):
     
     t = Tree(newick_str, format=1)
+
     R = t.get_midpoint_outgroup()
     t.set_outgroup(R)
+ 
+    # t.write(format=1, outfile=f"../tree-tests/{fam}-init-tree.newick")
+
     counter = [0]
     node_taxa_mapping = {}
     taxa_node_mapping = {}
@@ -181,7 +173,8 @@ def newick_to_graph(newick_str):
     for node in t.traverse("preorder"):
 
         if node.is_leaf():
-            node_taxa_mapping[counter[0]] = node.name.replace("'","")
+            node.name = node.name.replace("'","")
+            node_taxa_mapping[counter[0]] = node.name
             taxa_node_mapping[node.name] = counter[0]
 
         node.name = counter[0]
@@ -194,7 +187,7 @@ def node_embedding(tree, seqs_order, node_taxa_mapping, rooted = False, leaf_emb
     ntips = len(tree.get_leaves()) 
 
     if leaf_embeddings == None:   
-        leaf_embeddings = torch.eye(ntips).to(device)
+        leaf_embeddings = torch.eye(ntips).to(leaf_embeddings.device)
 
         
     for node in tree.traverse('postorder'):
@@ -242,54 +235,3 @@ def node_embedding(tree, seqs_order, node_taxa_mapping, rooted = False, leaf_emb
     edge_index = torch.LongTensor(edge_index)
     
     return torch.stack(node_features), edge_index, leaf_indices
-
-
-# def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, batch_size = 10):
-
-#     torch.cuda.empty_cache()
-    
-#     all_embeddings = []
-
-#     # Process in batches
-#     for batch_start in tqdm(range(0, len(data_ids), batch_size)):
-
-#         current_batch = range(batch_start, batch_start + batch_size)
-
-#         true_trees = [Phylo.read(f"../data/msa-seed-simulations-subtrees/{data_ids[i][0]}/subtree-{data_ids[i][1]}.newick", format="newick") for i in current_batch]
-
-#         for i in range(len(true_trees)):
-#             true_trees[i].root_at_midpoint()
-
-#         batch_paths = [f"../data/submsa-seed-simulations/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta" for i in current_batch]
-
-#         # Load MSAs
-#         batch_data = [read_msa(p) for p in batch_paths]
-#         batch_data = [reorder_seqs(true_trees[i].clade, dict(batch_data[i])) for i in range(len(batch_data))]
-
-#         # Store sizes for unbatching
-#         msa_depths = [len(msa) for msa in batch_data]
-#         msa_lengths = [len(msa[0][1]) for msa in batch_data]
-
-#         # Convert to tokens
-#         _, _, batch_tokens = batch_converter(batch_data)  # shape: (B, N_max, L_max)
-#         batch_tokens = batch_tokens.to(device)
-
-#         with torch.no_grad():
-#             batch_embeddings = model(batch_tokens, need_head_weights = False, return_contacts = False, repr_layers = [12])["representations"][12]
-#             batch_embeddings = batch_embeddings.mean(dim=2)
-#             B, R, H = batch_embeddings.shape
-#             padding_tensor = torch.zeros((B,R, Large_D - H)).to(device)
-#             batch_embeddings = torch.concat((batch_embeddings, padding_tensor), dim=2)
-
-#             del padding_tensor
-
-#             for i, (depth, length, path) in enumerate(zip(msa_depths, msa_lengths, batch_paths)):
-                
-#                 leaf_emb = batch_embeddings[i, :depth, :].cpu()
-#                 all_embeddings.append(leaf_emb)
-
-#             del batch_tokens, batch_embeddings
-#             torch.cuda.empty_cache()
-
-
-#     return all_embeddings

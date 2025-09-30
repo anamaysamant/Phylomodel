@@ -1,9 +1,5 @@
 import pickle as pkl
 
-FAMILIES = ["PF00271","PF00005","PF00004","PF01535","PF13354","PF00595","PF00397","PF00153","PF07679",
-            "PF00076","PF00072","PF00096","PF00512","PF00041","PF02518"]
-            # "PF01356","PF03440","PF04008","PF06351","PF06355", "PF16747","PF18648"]
-# FAMILIES = ["PF00004"]
 MSA_TYPES = ["seed"]
 CONTEXT_TYPES = ["static"]
 CONTEXT_SIZES = ["10"]
@@ -16,7 +12,7 @@ INIT_SEQS = ["0"]
 N_MUTATIONS_START = 500
 N_MUTATIONS_END = ["1000"]
 
-num_simulations = 10
+num_simulations = 20000
 
 SIM_INDS = list(range(1,num_simulations+1))
 SIM_INDS = list(map(str,SIM_INDS))
@@ -40,7 +36,8 @@ for family in ALL_FAMILIES:
     if os.path.exists(f"data/msa-seed-simulations/MSA-1b/{family}/init-seq-0/logits-proposal/static-context/10/{family}-1.fasta"):
         FAMILIES.append(family)
 
-NSEQS = ["50"]
+NSEQS = ["4"]
+FAMILIES = ["PF00271"]
 
 rule all:
     input:

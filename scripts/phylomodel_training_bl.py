@@ -11,56 +11,29 @@ from select_gpu import get_free_gpu
 import torch.nn as nn
 import re
 
+from phylomodel_training_aux_fns import *
+
 torch.set_grad_enabled(True)
 
-TensorLike = TypeVar("TensorLike", np.ndarray, torch.Tensor)
+def generate_model_outputs(data, labels):
 
-class TreeDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
+    msa_index_vector = [torch.tensor([ind] * len(labels[0])) for ind in range(len(data))]
+    msa_index_vector = torch.concat(msa_index_vector)
 
-    def __len__(self):
-        return len(self.data[0])
+    seq_mask = (labels != -1)
 
-    def __getitem__(self, idx):
-        X, y = self.data[0][idx], self.data[1][idx]
-        return X, y
+    data = data[seq_mask, :].to(device)
+    labels = labels[seq_mask].to(device)
+    msa_index_vector = msa_index_vector[seq_mask.flatten()].to(device)
 
-def collate_tensors(
-sequences: Sequence[TensorLike], constant_value=0, dtype=None
-) -> TensorLike:
-    
-    batch_size = len(sequences)
+    attn_mask = (msa_index_vector.unsqueeze(0) == msa_index_vector.unsqueeze(1)).float() 
+    attn_mask = (1 - attn_mask) * -1e9
 
-    X_batch, y_batch = zip(*sequences)
-    X_batch, y_batch = list(X_batch), list(y_batch)
-    
-    shape_X = [batch_size] + np.max([mat.shape for mat in X_batch], 0).tolist()
-    shape_y = [batch_size] + [shape_X[1]]
+    outputs = model(data, attn_mask = attn_mask).squeeze(-1)
 
-    if dtype is None:
-        dtype = X_batch[0].dtype
+    root_mask = labels != 0
 
-    if isinstance(X_batch[0], np.ndarray):
-        X_array = np.full(shape_X, constant_value, dtype=dtype)
-    elif isinstance(X_batch[0], torch.Tensor):
-        X_array = torch.full(shape_X, constant_value, dtype=dtype)
-
-    if isinstance(y_batch[0], np.ndarray):
-        y_array = np.full(shape_y, -1, dtype=y_batch[0][0].dtype)
-    elif isinstance(y_batch[0], torch.Tensor):
-        y_array = torch.full(shape_y, -1, dtype=y_batch[0][0].dtype)
-        
-    for arr, mat in zip(X_array, X_batch):
-        arrslice = tuple(slice(dim) for dim in mat.shape)
-        arr[arrslice] = mat
-
-    for arr, mat in zip(y_array, y_batch):
-        arrslice = tuple(slice(dim) for dim in mat.shape)
-        arr[arrslice] = mat
-
-
-    return X_array, y_array
+    return outputs[root_mask], labels[root_mask]
 
 with open("../data/root_distance_MSA_train_test_sets_MSA_transf_dirichlet_under_200_equal.pkl","rb") as f:
    data = pkl.load(f)
@@ -150,45 +123,12 @@ for epoch in range(cur_epochs, num_epochs):
 
         total_loss = torch.tensor(0, dtype=torch.float32).to(device)
 
-        n_int_nodes_list = []
+        outputs, labels = generate_model_outputs(data, labels)
 
-        for j in range(len(labels)):
+        cur_mse_loss = criterion_sum(outputs, labels)
+        total_loss += cur_mse_loss 
 
-            total_nodes = (labels[j] != -1).sum()
-            n_int_nodes = int((total_nodes + 1)/2 - 1)
-
-            n_int_nodes_list.append(n_int_nodes) 
-
-        n_int_nodes_vector = [torch.tensor([n_nodes] * len(labels[0])) for n_nodes in n_int_nodes_list]
-        n_int_nodes_vector = torch.concat(n_int_nodes_vector)
-
-        n_int_nodes_list = torch.tensor(n_int_nodes_list)
-
-        for n_nodes in n_int_nodes_list.unique():
-
-            data_j = data[n_int_nodes_list == n_nodes]
-            labels_j = labels[n_int_nodes_list == n_nodes]
-
-            msa_index_vector_j = [torch.tensor([ind] * len(labels_j[0])) for ind in range(len(data_j))]
-            msa_index_vector_j = torch.concat(msa_index_vector_j)
-
-            seq_mask = (labels_j != -1)
-
-            data_j = data_j[seq_mask, :].to(device)
-            labels_j = labels_j[seq_mask].to(device)
-            msa_index_vector_j = msa_index_vector_j[seq_mask.flatten()].to(device)
-
-            attn_mask = (msa_index_vector_j.unsqueeze(0) == msa_index_vector_j.unsqueeze(1)).float() 
-            attn_mask = (1 - attn_mask) * -1e9
-
-            outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)
-
-            root_mask = labels_j != 0
-
-            cur_mse_loss = criterion_sum(outputs[root_mask], labels_j[root_mask])
-            total_loss += cur_mse_loss 
-
-            n_train_nodes += len(labels_j[root_mask])
+        n_train_nodes += len(labels)
         
         optimizer.zero_grad()
         total_loss.backward()
@@ -207,46 +147,11 @@ for epoch in range(cur_epochs, num_epochs):
         n_train_nodes = 0
        
         for i, (data, labels) in enumerate(train_loader):
-            
-            n_int_nodes_list = []
 
-            for j in range(len(labels)):
+            outputs, labels = generate_model_outputs(data, labels)
 
-                total_nodes = (labels[j] != -1).sum()
-                n_int_nodes = int((total_nodes + 1)/2 - 1)
-
-                n_int_nodes_list.append(n_int_nodes) 
-
-            n_int_nodes_vector = [torch.tensor([n_nodes] * len(labels[0])) for n_nodes in n_int_nodes_list]
-            n_int_nodes_vector = torch.concat(n_int_nodes_vector)
-
-            n_int_nodes_list = torch.tensor(n_int_nodes_list)
-
-            for n_nodes in n_int_nodes_list.unique():
-
-                data_j = data[n_int_nodes_list == n_nodes]
-                labels_j = labels[n_int_nodes_list == n_nodes]
-
-                cur_n_train = len(data_j)
-
-                msa_index_vector_j = [torch.tensor([ind] * len(labels_j[0])) for ind in range(len(data_j))]
-                msa_index_vector_j = torch.concat(msa_index_vector_j)
-
-                seq_mask = (labels_j != -1)
-
-                data_j = data_j[seq_mask, :].to(device)
-                labels_j = labels_j[seq_mask].to(device)
-                msa_index_vector_j = msa_index_vector_j[seq_mask.flatten()].to(device)
-
-                attn_mask = (msa_index_vector_j.unsqueeze(0) == msa_index_vector_j.unsqueeze(1)).float() 
-                attn_mask = (1 - attn_mask) * -1e9
-
-                outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)
-
-                root_mask = labels_j != 0
-
-                train_epoch_loss += criterion_sum(outputs[root_mask], labels_j[root_mask])
-                n_train_nodes += len(labels_j[root_mask])
+            train_epoch_loss += criterion_sum(outputs, labels)
+            n_train_nodes += len(labels)
 
         train_epoch_losses.append((train_epoch_loss/n_train_nodes).item())
 
@@ -257,45 +162,10 @@ for epoch in range(cur_epochs, num_epochs):
 
         for i, (data, labels) in enumerate(test_loader):
 
-            n_int_nodes_list = []
+            outputs, labels = generate_model_outputs(data, labels)
 
-            for j in range(len(labels)):
-
-                total_nodes = (labels[j] != -1).sum()
-                n_int_nodes = int((total_nodes + 1)/2 - 1)
-
-                n_int_nodes_list.append(n_int_nodes) 
-
-            n_int_nodes_vector = [torch.tensor([n_nodes] * len(labels[0])) for n_nodes in n_int_nodes_list]
-            n_int_nodes_vector = torch.concat(n_int_nodes_vector)
-
-            n_int_nodes_list = torch.tensor(n_int_nodes_list)
-
-            for n_nodes in n_int_nodes_list.unique():
-
-                data_j = data[n_int_nodes_list == n_nodes]
-                labels_j = labels[n_int_nodes_list == n_nodes]
-
-                cur_n_test = len(data_j)
-
-                msa_index_vector_j = [torch.tensor([ind] * len(labels_j[0])) for ind in range(len(data_j))]
-                msa_index_vector_j = torch.concat(msa_index_vector_j)
-
-                seq_mask = (labels_j != -1)
-
-                data_j = data_j[seq_mask, :].to(device)
-                labels_j = labels_j[seq_mask].to(device)
-                msa_index_vector_j = msa_index_vector_j[seq_mask.flatten()].to(device)
-
-                attn_mask = (msa_index_vector_j.unsqueeze(0) == msa_index_vector_j.unsqueeze(1)).float() 
-                attn_mask = (1 - attn_mask) * -1e9
-
-                outputs = model(data_j, attn_mask = attn_mask).squeeze(-1)
-
-                root_mask = labels_j != 0
-
-                test_epoch_loss += criterion_sum(outputs[root_mask], labels_j[root_mask])
-                n_test_nodes += len(labels_j[root_mask])
+            test_epoch_loss += criterion_sum(outputs, labels)
+            n_test_nodes += len(labels)
 
         test_epoch_losses.append((test_epoch_loss/n_test_nodes).item())
 
