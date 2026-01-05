@@ -133,3 +133,4 @@ dmypy.json
 .snakemake
 /bmdca-output
 /logs
+/scripts/data

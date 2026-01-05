@@ -38,6 +38,8 @@ for family in all_families_init:
         all_families.append(family)
 
 # all_families = all_families[:10]
+all_families = [x.split('_')[0] for x in os.listdir("../data/simulated_msas_phyloformer/size-4-len-100")]
+print(all_families[:10])
 
 gpu = str(get_free_gpu())
 device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
@@ -46,7 +48,7 @@ msa_transf = msa_transf.to(device)
 batch_converter = alphabet.get_batch_converter()
 msa_transf.eval()
 
-# num_subtrees = len(os.listdir(f"../data/msa-seed-simulations-subtrees-equal-size/50/{all_families[0]}/"))
+# num_subtrees = 1
 
 # train_split = 0.9
 # train_size = int(np.ceil(train_split * len(all_families)))
@@ -77,49 +79,74 @@ msa_transf.eval()
 
 all_families = ["PF00004"]
 
-num_subtrees = len(os.listdir(f"../data/msa-seed-simulations-subtrees-equal-size/50/{all_families[0]}/"))
+X_train_all_fams = []
+y_train_bl_all_fams = []
+y_train_rd_all_fams = [] 
 
-data_ids = [(all_families[0], i) for i in list(range(1,num_subtrees))]
+X_test_all_fams = []
+y_test_bl_all_fams = []
+y_test_rd_all_fams = []
 
-train_split = 0.9
-train_size = int(np.ceil(train_split * len(data_ids)))
+for dataset in ["train","test"]:
 
-train_ids_ind = np.random.choice(range(len(data_ids)), train_size, replace = False)
-train_ids = [data_ids[ind] for ind in train_ids_ind]
+    for fam in all_families:
 
-test_ids_ind = list(set(range(len(data_ids))) - set(train_ids_ind))
-test_ids = [data_ids[ind] for ind in test_ids_ind]
+        num_subtrees = len(os.listdir(f"../data/msa-seed-simulations-subtrees-equal-size/4/{dataset}/{fam}/"))
 
-train_leaf_embeds = prepare_initial_leaf_embeddings(train_ids, Large_D = Large_D, model = msa_transf, batch_converter = batch_converter, device = device)
-test_leaf_embeds = prepare_initial_leaf_embeddings(test_ids, Large_D = Large_D, model = msa_transf, batch_converter = batch_converter, device = device)
+        data_ids = [(fam, i) for i in list(range(1,num_subtrees+1))]
 
-train_res = list(
-    tqdm(
-        Parallel(return_as="generator", n_jobs=30)(
-            delayed(make_datasets)(train_id) for i,train_id in enumerate(train_ids)
-        ),
-        total=len(train_ids),
+        train_split = 0.9
+        train_size = int(np.ceil(train_split * len(data_ids)))
+
+        train_ids_ind = np.random.choice(range(len(data_ids)), train_size, replace = False)
+        train_ids = [data_ids[ind] for ind in train_ids_ind]
+
+        test_ids_ind = list(set(range(len(data_ids))) - set(train_ids_ind))
+        test_ids = [data_ids[ind] for ind in test_ids_ind]
+
+    train_leaf_embeds = prepare_initial_leaf_embeddings(train_ids, Large_D = Large_D, model = msa_transf, batch_converter = batch_converter, device = device, use_transf = True, alphabet = alphabet)
+    test_leaf_embeds = prepare_initial_leaf_embeddings(test_ids, Large_D = Large_D, model = msa_transf, batch_converter = batch_converter, device = device, use_transf = True, alphabet = alphabet)
+
+    train_res = list(
+        tqdm(
+            Parallel(return_as="generator", n_jobs=30)(
+                delayed(make_datasets)(train_id) for i,train_id in enumerate(train_ids)
+            ),
+            total=len(train_ids),
+        )
     )
-)
 
-test_res = list(
-    tqdm(
-        Parallel(return_as="generator", n_jobs=30)(
-            delayed(make_datasets)(test_id) for i, test_id in enumerate(test_ids)
-        ),
-        total=len(test_ids),
+    test_res = list(
+        tqdm(
+            Parallel(return_as="generator", n_jobs=30)(
+                delayed(make_datasets)(test_id) for i, test_id in enumerate(test_ids)
+            ),
+            total=len(test_ids),
+        )
     )
-)
 
-X_train = [train_leaf_embeds[i] for i in range(len(train_res)) if train_res[i][0] != None]
-y_train_bl = [item[0] for item in train_res if item[0] != None]
-y_train_rd = [item[1] for item in train_res if item[1] != None] 
+    X_train = [train_leaf_embeds[i] for i in range(len(train_res)) if train_res[i][0] != None]
+    y_train_bl = [item[0] for item in train_res if item[0] != None]
+    y_train_rd = [item[1] for item in train_res if item[1] != None] 
 
-X_test = [test_leaf_embeds[i] for i in range(len(test_res)) if test_res[i][0] != None]
-y_test_bl = [item[0] for item in test_res if item[0] != None]
-y_test_rd = [item[1] for item in test_res if item[1] != None]
+    X_test = [test_leaf_embeds[i] for i in range(len(test_res)) if test_res[i][0] != None]
+    y_test_bl = [item[0] for item in test_res if item[0] != None]
+    y_test_rd = [item[1] for item in test_res if item[1] != None]
 
-with open(f"train_test_sets_leaves_PF00004_size_50_rd.pkl","wb") as f:
+    # X_train_all_fams.extend(X_train)
+    # y_train_bl_all_fams.extend(y_train_bl)
+    # y_train_rd_all_fams.extend(y_train_rd)
+
+    # X_test_all_fams.extend(X_test)
+    # y_test_bl_all_fams.extend(y_test_bl)
+    # y_test_rd_all_fams.extend(y_test_rd)
+
+
+with open(f"train_test_sets_leaves_under_200_size_4_10_reps_rd.pkl","wb") as f:
     pkl.dump([X_train, X_test, y_train_bl, y_test_bl, y_train_rd, y_test_rd], f)
+
+
+# with open(f"train_test_sets_leaves_PF00004_PF00271_size_4_rd.pkl","wb") as f:
+#     pkl.dump([X_train_all_fams, X_test_all_fams, y_train_bl_all_fams, y_test_bl_all_fams, y_train_rd_all_fams, y_test_rd_all_fams], f)
 
     

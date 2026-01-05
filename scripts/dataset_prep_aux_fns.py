@@ -45,7 +45,7 @@ def prepare_branch_lengths_and_relationships(true_tree_path, MSA_path):
 
     sequences = read_msa(MSA_path)
     true_tree = Phylo.read(true_tree_path, format="newick")
-    true_tree.root_at_midpoint()
+    # true_tree.root_at_midpoint()
 
     sequences = reorder_seqs(true_tree.clade, dict(sequences))
     seqs_order = [seq[0] for seq in sequences]
@@ -115,10 +115,12 @@ def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, model = None, batc
 
     for i in tqdm(range(len(data_ids))):
 
-        true_tree = Phylo.read(f"../data/msa-seed-simulations-subtrees-equal-size/4/{data_ids[i][0]}/subtree-{data_ids[i][1]}.newick", format="newick")
-        true_tree.root_at_midpoint()
+        # true_tree = Phylo.read(f"../data/msa-seed-simulations-subtrees-equal-size/50/{data_ids[i][0]}/subtree-{data_ids[i][1]}.newick", format="newick")
+        true_tree = Phylo.read(f"../data/simulated_trees_phyloformer/{data_ids[i][0]}_50_tips.newick", format="newick")
+        # true_tree.root_at_midpoint()
 
-        submsa_path = f"../data/submsa-seed-simulations-equal-size/4/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta"
+        # submsa_path = f"../data/submsa-seed-simulations-equal-size/50/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta"
+        submsa_path = f"../data/simulated_msas_phyloformer/{data_ids[i][0]}_50_tips.fa"
 
         submsa = read_msa(submsa_path) 
         submsa = reorder_seqs(true_tree.clade, dict(submsa))
@@ -145,8 +147,11 @@ def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, model = None, batc
 
 def make_datasets(data_id, leaf_embeddings = None, Large_D = 1000):
     
-    true_tree_path = f"../data/msa-seed-simulations-subtrees-equal-size/4/{data_id[0]}/subtree-{data_id[1]}.newick"
-    MSA_path = f"../data/submsa-seed-simulations-equal-size/4/{data_id[0]}/submsa-{data_id[1]}.fasta"
+    # true_tree_path = f"../data/msa-seed-simulations-subtrees-equal-size/50/{data_id[0]}/subtree-{data_id[1]}.newick"
+    # MSA_path = f"../data/submsa-seed-simulations-equal-size/50/{data_id[0]}/submsa-{data_id[1]}.fasta"
+
+    true_tree_path = f"../data/simulated_trees_phyloformer/{data_id[0]}_50_tips.newick"
+    MSA_path = f"../data/simulated_msas_phyloformer/{data_id[0]}_50_tips.fa"
 
     all_branch_lengths, mapped_parents, seqs_order = prepare_branch_lengths_and_relationships(true_tree_path, MSA_path)
 
@@ -161,8 +166,9 @@ def newick_to_graph(newick_str, fam = None):
     
     t = Tree(newick_str, format=1)
 
-    R = t.get_midpoint_outgroup()
-    t.set_outgroup(R)
+    if len(t.children) == 3:
+        R = t.get_midpoint_outgroup()
+        t.set_outgroup(R)
  
     # t.write(format=1, outfile=f"../tree-tests/{fam}-init-tree.newick")
 
@@ -173,11 +179,12 @@ def newick_to_graph(newick_str, fam = None):
     for node in t.traverse("preorder"):
 
         if node.is_leaf():
-            node.name = node.name.replace("'","")
+            node.name = node.name.replace("'","").rstrip()
             node_taxa_mapping[counter[0]] = node.name
             taxa_node_mapping[node.name] = counter[0]
 
         node.name = counter[0]
+        # print(node.name)
         counter[0] += 1
 
     return t, node_taxa_mapping, taxa_node_mapping
@@ -188,7 +195,6 @@ def node_embedding(tree, seqs_order, node_taxa_mapping, rooted = False, leaf_emb
 
     if leaf_embeddings == None:   
         leaf_embeddings = torch.eye(ntips).to(leaf_embeddings.device)
-
         
     for node in tree.traverse('postorder'):
         if node.is_leaf():

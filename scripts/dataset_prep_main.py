@@ -44,47 +44,51 @@ msa_transf = msa_transf.to(device)
 batch_converter = alphabet.get_batch_converter()
 msa_transf.eval()
 
-# train_split = 0.9
-# train_size = int(np.ceil(train_split * len(all_families)))
-
-# train_families_ind = np.random.choice(range(len(all_families)), train_size, replace = False)
-# train_families = [all_families[ind] for ind in train_families_ind]
-
-# test_families_ind = list(set(range(len(all_families))) - set(train_families_ind))
-# test_families = [all_families[ind] for ind in test_families_ind]
-
-# train_fam_reps = []
-
-# for family in train_families:
-#     train_fam_reps += [family] * num_subtrees
-
-# ind_reps = list(range(1, num_subtrees + 1)) * len(train_families)
-
-# train_ids = [(train_fam_reps[i], ind_reps[i]) for i in range(len(ind_reps))]
-
-# test_fam_reps = []
-
-# for family in test_families:
-#     test_fam_reps += [family] * num_subtrees
-
-# ind_reps = list(range(1, num_subtrees + 1)) * len(test_families)
-
-# test_ids = [(test_fam_reps[i], ind_reps[i]) for i in range(len(ind_reps))]
-
-all_families = ["PF00004"]
-
-num_subtrees = len(os.listdir(f"../data/msa-seed-simulations-subtrees-equal-size/4/{all_families[0]}/"))
-
-data_ids = [(all_families[0], i) for i in list(range(1,num_subtrees))]
+all_families = [x.split('_')[0] for x in os.listdir("../data/simulated_msas_phyloformer/")]
+num_subtrees = 1
 
 train_split = 0.9
-train_size = int(np.ceil(train_split * len(data_ids)))
+train_size = int(np.ceil(train_split * len(all_families)))
 
-train_ids_ind = np.random.choice(range(len(data_ids)), train_size, replace = False)
-train_ids = [data_ids[ind] for ind in train_ids_ind]
+train_families_ind = np.random.choice(range(len(all_families)), train_size, replace = False)
+train_families = [all_families[ind] for ind in train_families_ind]
 
-test_ids_ind = list(set(range(len(data_ids))) - set(train_ids_ind))
-test_ids = [data_ids[ind] for ind in test_ids_ind]
+test_families_ind = list(set(range(len(all_families))) - set(train_families_ind))
+test_families = [all_families[ind] for ind in test_families_ind]
+
+train_fam_reps = []
+
+for family in train_families:
+    train_fam_reps += [family] * num_subtrees
+
+ind_reps = list(range(1, num_subtrees + 1)) * len(train_families)
+
+train_ids = [(train_fam_reps[i], ind_reps[i]) for i in range(len(ind_reps))]
+
+test_fam_reps = []
+
+for family in test_families:
+    test_fam_reps += [family] * num_subtrees
+
+ind_reps = list(range(1, num_subtrees + 1)) * len(test_families)
+
+test_ids = [(test_fam_reps[i], ind_reps[i]) for i in range(len(ind_reps))]
+
+# all_families = ["PF00004"]
+
+# num_subtrees = len(os.listdir(f"../data/msa-seed-simulations-subtrees-equal-size/50/{all_families[0]}/"))
+
+# data_ids = [(all_families[0], i) for i in list(range(1,num_subtrees))]
+data_ids = [(all_families[0], i) for i in list(range(20000))]
+
+# train_split = 0.9
+# train_size = int(np.ceil(train_split * len(data_ids)))
+
+# train_ids_ind = np.random.choice(range(len(data_ids)), train_size, replace = False)
+# train_ids = [data_ids[ind] for ind in train_ids_ind]
+
+# test_ids_ind = list(set(range(len(data_ids))) - set(train_ids_ind))
+# test_ids = [data_ids[ind] for ind in test_ids_ind]
 
 train_leaf_embeds = prepare_initial_leaf_embeddings(train_ids, Large_D = Large_D, model = msa_transf, batch_converter = batch_converter, device = device)
 test_leaf_embeds = prepare_initial_leaf_embeddings(test_ids, Large_D = Large_D, model = msa_transf, batch_converter = batch_converter, device = device)
@@ -115,7 +119,7 @@ X_test = [torch.concat((test_res[i][0], test_leaf_embeds[i]), dim=0) for i in ra
 y_test_bl = [item[1] for item in test_res if item[1] != None]
 y_test_pc = [item[2] for item in test_res if item[2] != None]
 
-with open(f"{method}_MSA_train_test_sets_MSA_transf_dirichlet_under_200_equal.pkl","wb") as f:
+with open(f"train_test_sets_dirichlet_PF00004_size_50_pp.pkl","wb") as f:
     pkl.dump([X_train, X_test, y_train_bl, y_test_bl, y_train_pc, y_test_pc], f)
 
     

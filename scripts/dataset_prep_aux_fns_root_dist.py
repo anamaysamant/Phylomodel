@@ -67,7 +67,7 @@ def prepare_branch_lengths_and_root_distances(true_tree_path, MSA_path):
 
     return all_branch_lengths, all_root_distances, seqs_order_dict
 
-def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, model = None, batch_converter = None, device = "cuda"):
+def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, model = None, batch_converter = None, device = "cuda", use_transf = True, alphabet = None):
 
     torch.cuda.empty_cache()
     
@@ -75,34 +75,61 @@ def prepare_initial_leaf_embeddings(data_ids, Large_D = 1000, model = None, batc
 
     for i in tqdm(range(len(data_ids))):
 
-        submsa_path = f"../data/submsa-seed-simulations-equal-size/50/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta"
+        # submsa_path = f"../data/submsa-seed-simulations-equal-size/4/{data_ids[i][0]}/submsa-{data_ids[i][1]}.fasta"
+        submsa_path = f"../data/simulated_msas_phyloformer/size-4-len-100/{data_ids[i][0]}_4_tips.fa"
         submsa = read_msa(submsa_path) 
 
 
         _, _, tokens = batch_converter([submsa])
         tokens = tokens.to(device)
 
-        with torch.no_grad():
-            embeddings = model(tokens, need_head_weights = False, return_contacts = False, repr_layers = [12])["representations"][12][0]
-            embeddings = embeddings.mean(dim=1).cpu()
-            R, H = embeddings.shape
-            padding_tensor = torch.zeros((R, Large_D - H))
-            embeddings = torch.concat((embeddings, padding_tensor), dim=1)
+        if use_transf:
+            with torch.no_grad():
+                embeddings = model(tokens, need_head_weights = False, return_contacts = False, repr_layers = [12])["representations"][12][0]
+                embeddings = embeddings.mean(dim=1).cpu()
+                R, H = embeddings.shape
+                padding_tensor = torch.zeros((R, Large_D - H))
+                embeddings = torch.concat((embeddings, padding_tensor), dim=1)
 
-            del padding_tensor, tokens
+
+                del padding_tensor, tokens
+            
+                all_embeddings.append(embeddings)
+
+                del embeddings
+                torch.cuda.empty_cache()
+        else:
+            alphabet_dict = alphabet.to_dict()
+
+            embeddings = torch.zeros(len(submsa), len(submsa[0][1]), len(alphabet_dict))
+
+            for k in range(len(submsa)): 
+                for j, tok in enumerate(tokens[0][k][1:]):
+                    embeddings[k, j, tok] = 1
+
+            embeddings = embeddings.mean(dim = 1)
+            # R, H = embeddings.shape
+            # padding_tensor = torch.zeros((R, Large_D - H))
+            # embeddings = torch.concat((embeddings, padding_tensor), dim=1)
+
+            del tokens
         
             all_embeddings.append(embeddings)
 
             del embeddings
-            torch.cuda.empty_cache()
+
+
 
     return all_embeddings
 
 
 def make_datasets(data_id, leaf_embeddings = None, Large_D = 768):
     
-    true_tree_path = f"../data/msa-seed-simulations-subtrees-equal-size/50/{data_id[0]}/subtree-{data_id[1]}.newick"
-    MSA_path = f"../data/submsa-seed-simulations-equal-size/50/{data_id[0]}/submsa-{data_id[1]}.fasta"
+    # true_tree_path = f"../data/msa-seed-simulations-subtrees-equal-size/4/{data_id[0]}/subtree-{data_id[1]}.newick"
+    # MSA_path = f"../data/submsa-seed-simulations-equal-size/4/{data_id[0]}/submsa-{data_id[1]}.fasta"
+
+    true_tree_path = f"../data/simulated_trees_phyloformer/size-4/{data_id[0]}_4_tips.newick"
+    MSA_path = f"../data/simulated_msas_phyloformer/size-4-len-100/{data_id[0]}_4_tips.fa"
 
     all_branch_lengths, all_root_distances, seqs_order = prepare_branch_lengths_and_root_distances(true_tree_path, MSA_path)
 
@@ -113,6 +140,12 @@ def newick_to_graph(newick_str):
     t = Tree(newick_str, format=1)
     # R = t.get_midpoint_outgroup()
     # t.set_outgroup(R)
+
+    if len(t.children) == 3:
+        print("x")
+        R = t.get_midpoint_outgroup()
+        t.set_outgroup(R)
+
     counter = [0]
     node_taxa_mapping = {}
     taxa_node_mapping = {}

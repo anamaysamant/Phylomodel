@@ -105,3 +105,38 @@ sequences: Sequence[TensorLike], constant_value=0, dtype=None
         arr[arrslice] = mat
 
     return X_array, y1_array, y2_array
+
+def collate_tensors_no_int(
+sequences: Sequence[TensorLike], constant_value=0, dtype=None
+) -> TensorLike:
+    
+    batch_size = len(sequences)
+
+    X_batch, y_batch = zip(*sequences)
+    X_batch, y_batch = list(X_batch), list(y_batch)
+    
+    shape_X = [batch_size] + np.max([mat.shape for mat in X_batch], 0).tolist()
+    shape_y = [batch_size] + [2 * shape_X[1] - 1]
+
+    if dtype is None:
+        dtype = X_batch[0].dtype
+
+    if isinstance(X_batch[0], np.ndarray):
+        X_array = np.full(shape_X, constant_value, dtype=dtype)
+    elif isinstance(X_batch[0], torch.Tensor):
+        X_array = torch.full(shape_X, constant_value, dtype=dtype)
+
+    if isinstance(y_batch[0], np.ndarray):
+        y_array = np.full(shape_y, -1, dtype=y_batch[0][0].dtype)
+    elif isinstance(y_batch[0], torch.Tensor):
+        y_array = torch.full(shape_y, -1, dtype=y_batch[0][0].dtype)
+        
+    for arr, mat in zip(X_array, X_batch):
+        arrslice = tuple(slice(dim) for dim in mat.shape)
+        arr[arrslice] = mat
+
+    for arr, mat in zip(y_array, y_batch):
+        arrslice = tuple(slice(dim) for dim in mat.shape)
+        arr[arrslice] = mat
+
+    return X_array, y_array

@@ -23,10 +23,10 @@ def generate_model_outputs(data, branch_length_labels, root_distance_labels):
 
     y_mask = (branch_length_labels != -1)
 
-    x_mask = (data != 0).all(dim=2)
+    x_mask = ~((data == 0).all(dim=2))
 
     data = data[x_mask, :].to(device)
-
+    
     if y_mask.sum().item() != 2 * data.shape[0] - 1:
         return None, None, None, None
     
@@ -38,6 +38,8 @@ def generate_model_outputs(data, branch_length_labels, root_distance_labels):
     attn_mask = (msa_index_vector.unsqueeze(0) == msa_index_vector.unsqueeze(1)).float() 
     attn_mask = (1 - attn_mask) * -1e9
 
+    print(attn_mask.shape)
+    
     branch_length_preds, root_distance_preds = model(data, attn_mask = attn_mask)
 
     branch_length_preds = branch_length_preds.squeeze(-1)
@@ -47,22 +49,29 @@ def generate_model_outputs(data, branch_length_labels, root_distance_labels):
 
     return branch_length_preds[root_mask], root_distance_preds[root_mask], branch_length_labels[root_mask], root_distance_labels[root_mask]
 
-with open("../data/processed-train-test-data/train_test_sets_leaves_PF00004_size_50_rd.pkl","rb") as f:
+with open("../data/processed-train-test-data/train_test_sets_leaves_PF00004_size_4_no_leak_rd.pkl","rb") as f:
    data = pkl.load(f)
 
-X_train = data[0]
-X_test = data[1]
-y_train_bl = data[2]
-y_test_bl = data[3]
-y_train_rd = data[4]
-y_test_rd = data[5]
+# X_train = data[0]
+# X_test = data[1]
+# y_train_bl = data[2]
+# y_test_bl = data[3]
+# y_train_rd = data[4]
+# y_test_rd = data[5]
+
+X_train = data["X_train"]
+X_test = data["X_test"]
+y_train_bl = data["y_train_bl"]
+y_test_bl = data["y_test_bl"]
+y_train_rd = data["y_train_rd"]
+y_test_rd = data["y_test_rd"]
 
 train_dataset = TreeDatasetRD((X_train, y_train_bl, y_train_rd))
 test_dataset = TreeDatasetRD((X_test, y_test_bl, y_test_rd))
 
 criterion = nn.MSELoss()
 criterion_sum = nn.MSELoss(reduction="sum")
-gpu = int(get_free_gpu())
+gpu = 1 # int(get_free_gpu())
 device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
 
 checkpoint_path = None
@@ -112,14 +121,14 @@ else:
     n_layers_main = 2
     attn_dim_int = 32
     n_heads_int = 2
-    n_layers_int = 1
+    n_layers_int = 2
     output_dim = 768
 
     hidden_dim_head = 64
     n_layers_bl = 1
     n_layers_rd = 1
 
-    bl_weight = 0.91
+    bl_weight = 0.5
 
     model = MainPhyloModel(input_dim, hidden_dim_base, attn_dim_main, n_heads_main, n_layers_main,
                   attn_dim_int, n_heads_int, n_layers_int, output_dim, 
@@ -141,6 +150,12 @@ n_total_steps = len(train_loader)
 
 train_epoch_losses = []
 test_epoch_losses = []
+
+train_bl_losses = []
+test_bl_losses = []
+
+train_rd_losses = []
+test_rd_losses = []
 
 num_epochs = 50
 
@@ -168,8 +183,8 @@ for epoch in range(cur_epochs, num_epochs):
         total_loss.backward()
         optimizer.step()
 
-        if (i+1) % 1 == 0:
-            print (f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{n_total_steps}], mean MSE Loss: {(total_loss/n_train_nodes).item():.4f}')
+        if (i+1) % 10 == 0:
+            print (f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{n_total_steps}], mean BL loss: {(bl_loss/n_train_nodes).item():.4f}, mean RD loss: {(rd_loss/n_train_nodes).item():.4f}, mean MSE Loss: {(total_loss/n_train_nodes).item():.4f}')
 
     scheduler.step()
 
@@ -178,6 +193,9 @@ for epoch in range(cur_epochs, num_epochs):
     with torch.no_grad():
 
         train_epoch_loss = torch.tensor(0, dtype=torch.float32).to(device)
+        total_bl_loss = torch.tensor(0, dtype=torch.float32).to(device)
+        total_rd_loss = torch.tensor(0, dtype=torch.float32).to(device)
+
         n_train_nodes = 0
        
         for i, (data, branch_length_labels, root_distance_labels) in enumerate(train_loader):
@@ -192,14 +210,20 @@ for epoch in range(cur_epochs, num_epochs):
 
             total_loss = bl_weight * bl_loss + (1 - bl_weight) * rd_loss
             train_epoch_loss += total_loss
+            total_bl_loss += bl_loss
+            total_rd_loss += rd_loss
 
             n_train_nodes += len(branch_length_labels)
 
         train_epoch_losses.append((train_epoch_loss/n_train_nodes).item())
+        train_bl_losses.append((total_bl_loss/n_train_nodes).item())
+        train_rd_losses.append((total_rd_loss/n_train_nodes).item())
 
     with torch.no_grad():
 
         test_epoch_loss = torch.tensor(0, dtype=torch.float32).to(device)
+        total_bl_loss = torch.tensor(0, dtype=torch.float32).to(device)
+        total_rd_loss = torch.tensor(0, dtype=torch.float32).to(device)
         n_test_nodes = 0
 
         for i, (data, branch_length_labels, root_distance_labels) in enumerate(test_loader):
@@ -214,17 +238,33 @@ for epoch in range(cur_epochs, num_epochs):
 
             total_loss = bl_weight * bl_loss + (1 - bl_weight) * rd_loss
             test_epoch_loss += total_loss
+            total_bl_loss += bl_loss
+            total_rd_loss += rd_loss
             n_test_nodes += len(branch_length_labels)
 
         test_epoch_losses.append((test_epoch_loss/n_test_nodes).item())
+        test_bl_losses.append((total_bl_loss/n_test_nodes).item())
+        test_rd_losses.append((total_rd_loss/n_test_nodes).item())
 
     if (epoch + 1) % 100 == 0 or epoch == num_epochs - 1:
 
         with open(f"train_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
             pkl.dump(train_epoch_losses, f)
 
+        with open(f"bl_train_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
+            pkl.dump(train_bl_losses, f)
+
+        with open(f"rd_train_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
+            pkl.dump(train_rd_losses, f)
+
         with open(f"test_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
             pkl.dump(test_epoch_losses,f)
+        
+        with open(f"bl_test_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
+            pkl.dump(test_bl_losses, f)
+
+        with open(f"rd_test_losses_{epoch + 1}epochs_{lr}lr_{batch_size}batch_under_200_eq.pkl", "wb") as f:
+            pkl.dump(test_rd_losses, f)
             
         torch.save({
                     'epoch': epoch + 1,
@@ -248,5 +288,5 @@ for epoch in range(cur_epochs, num_epochs):
                     'n_layers_bl':n_layers_bl,
                     'n_layers_rd':n_layers_rd,
                     }
-                    }, f"fit-200-equal-{epoch + 1}-epochs.pt")
+                    }, f"fit-PF00004-size-50-weighted-sumpos-rd-{epoch + 1}-epochs.pt")
 

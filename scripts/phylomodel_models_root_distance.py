@@ -62,14 +62,13 @@ class TransformerBlockCrossAttention(nn.Module):
 class DynamicQueryGenerator(nn.Module):
     def __init__(self, d_model, d_hidden=128):
         super().__init__()
-        # MLP that maps global pooled embedding to a seed vector
         self.seed_mlp = nn.Sequential(
             nn.Linear(d_model, d_hidden),
             nn.ReLU(),
             nn.Linear(d_hidden, d_model)
         )
         # projection to mix seed with positions
-        self.proj = nn.Linear(d_model + 16, d_model)  # 16 = pos encoding dim
+        self.proj = nn.Linear(d_model, d_model)  # 16 = pos encoding dim
 
     def forward(self, leaf_embeddings):
         """
@@ -84,15 +83,16 @@ class DynamicQueryGenerator(nn.Module):
         # 2) make positional encodings for N-1 queries
         pos_ids = torch.arange(N-1, device=leaf_embeddings.device).unsqueeze(1)  # (N-1,1)
         # simple sinusoidal encoding
-        div_term = torch.exp(torch.arange(0, 16, 2, device=leaf_embeddings.device) *
-                             -(torch.log(torch.tensor(10000.0)) / 16))
-        pe = torch.zeros(N-1, 16, device=leaf_embeddings.device)
+        div_term = torch.exp(torch.arange(0, d_model, 2, device=leaf_embeddings.device) *
+                             -(torch.log(torch.tensor(10000.0)) / d_model))
+        pe = torch.zeros(N-1, d_model, device=leaf_embeddings.device)
         pe[:, 0::2] = torch.sin(pos_ids * div_term)
         pe[:, 1::2] = torch.cos(pos_ids * div_term)
 
         # 3) concatenate seed with position encodings, project to d_model
         seed_expanded = seed.unsqueeze(0).repeat(N-1, 1)  # (N-1, d_model)
-        queries = self.proj(torch.cat([seed_expanded, pe], dim=-1))  # (N-1, d_model)
+        # queries = self.proj(torch.cat([seed_expanded, pe], dim=-1))  # (N-1, d_model)
+        queries = seed_expanded + pe
 
         return queries
     
